@@ -1,1 +1,1 @@
-[]
+[{"predictionHash":"9aa0154af2b56678de5c1a42bc94bad277196746b2d7a67c8ebf90cfe51212cc","period":"115000264","date":"2026-10-31","numbers":[2,5,17,28,37],"tails":[7,1],"hit":false,"eligible":true,"reason":"before_draw","rule":"both-distinct-tails-v1"}]
