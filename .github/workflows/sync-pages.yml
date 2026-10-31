@@ -1,0 +1,107 @@
+name: Sync official 539 results and predictions
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '7,37 * * * *'
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: lottery539-sync-pages
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.url }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Test validation, strict double-tail hit and immutable records
+        run: |
+          python -m unittest discover -s tests -v
+          node --check app.js
+          node --check ai-view.js
+      - name: Inspect existing Pages source and permissions
+        id: pages
+        run: python scripts/pages.py inspect
+      - name: Fetch official results and update model
+        id: update
+        continue-on-error: true
+        run: python scripts/update_data.py
+      - name: Commit source history and atomic snapshot
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add archive data.json data.js status.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Sync official draws and immutable double-tail predictions'
+            git push
+          fi
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Deploy existing branch-based Pages and verify public data
+        if: steps.pages.outputs.mode == 'legacy'
+        run: python scripts/pages.py legacy --url '${{ steps.pages.outputs.url }}'
+      - name: Prepare static artifact for Actions-based Pages
+        if: steps.pages.outputs.mode == 'workflow'
+        run: |
+          mkdir -p _site
+          cp index.html style.css app.js ai-view.js data.json data.js status.json _site/
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.pages.outputs.mode == 'workflow'
+        with:
+          path: _site
+          name: initial-site
+      - uses: actions/deploy-pages@v4
+        if: steps.pages.outputs.mode == 'workflow'
+        with:
+          artifact_name: initial-site
+      - name: Verify Actions-based public snapshot
+        if: steps.pages.outputs.mode == 'workflow'
+        run: python scripts/pages.py verify --url '${{ steps.pages.outputs.url }}'
+      - name: Confirm publication only after Pages verification
+        id: confirm
+        if: steps.update.outcome == 'success'
+        env:
+          PAGES_VERIFIED: 'true'
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python scripts/confirm_publication.py
+      - name: Persist publication confirmation
+        if: steps.confirm.outputs.changed == 'true'
+        run: |
+          git add archive data.json data.js status.json
+          git commit -m 'Confirm verified pre-draw publication timestamp'
+          git push
+      - name: Refresh confirmation on branch-based Pages
+        if: steps.confirm.outputs.changed == 'true' && steps.pages.outputs.mode == 'legacy'
+        run: python scripts/pages.py legacy --url '${{ steps.pages.outputs.url }}'
+      - name: Refresh Actions-based artifact
+        if: steps.confirm.outputs.changed == 'true' && steps.pages.outputs.mode == 'workflow'
+        run: cp data.json data.js status.json _site/
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.confirm.outputs.changed == 'true' && steps.pages.outputs.mode == 'workflow'
+        with:
+          path: _site
+          name: confirmed-site
+      - uses: actions/deploy-pages@v4
+        if: steps.confirm.outputs.changed == 'true' && steps.pages.outputs.mode == 'workflow'
+        with:
+          artifact_name: confirmed-site
+      - name: Verify final Actions-based snapshot
+        if: steps.confirm.outputs.changed == 'true' && steps.pages.outputs.mode == 'workflow'
+        run: python scripts/pages.py verify --url '${{ steps.pages.outputs.url }}'
+      - name: Report synchronization failure after publishing retained data and error status
+        if: steps.update.outcome != 'success'
+        run: exit 1

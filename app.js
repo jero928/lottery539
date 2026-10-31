@@ -20,11 +20,28 @@ $('prev-page').disabled=historyPage<=1;$('next-page').disabled=historyPage>=tota
 }
 $('prev-page').onclick=()=>{historyPage--;renderHistory();};
 $('next-page').onclick=()=>{historyPage++;renderHistory();};
-function tick(){const now=new Date(),day=dateTW(now);let target=new Date(day+'T20:30:00+08:00');const dow=new Date(day+'T12:00:00+08:00').getUTCDay();if(dow!==0&&now>=target&&now<new Date(day+'T21:30:00+08:00')&&!draws.some(d=>d.date===day)){$('schedule').textContent=day;$('countdown').textContent='開獎時段中，等待公告';return;}if(now>=target)target=new Date(+target+86400000);while(new Date(+target+28800000).getUTCDay()===0)target=new Date(+target+86400000);let sec=Math.max(0,Math.floor((target-now)/1000));$('schedule').textContent=dateTW(target)+' 20:30 起';$('countdown').textContent=[Math.floor(sec/3600),Math.floor(sec/60)%60,sec%60].map(n=>String(n).padStart(2,'0')).join(' : ');}
+function tick(){window.updatePredictionStatus?.();const now=new Date(),day=dateTW(now);let target=new Date(day+'T20:30:00+08:00');const dow=new Date(day+'T12:00:00+08:00').getUTCDay();if(dow!==0&&now>=target&&now<new Date(day+'T21:30:00+08:00')&&!draws.some(d=>d.date===day)){$('schedule').textContent=day;$('countdown').textContent='開獎時段中，等待公告';return;}if(now>=target)target=new Date(+target+86400000);while(new Date(+target+28800000).getUTCDay()===0)target=new Date(+target+86400000);let sec=Math.max(0,Math.floor((target-now)/1000));$('schedule').textContent=dateTW(target)+' 20:30 起';$('countdown').textContent=[Math.floor(sec/3600),Math.floor(sec/60)%60,sec%60].map(n=>String(n).padStart(2,'0')).join(' : ');}
 document.querySelectorAll('[data-days]').forEach(b=>b.onclick=()=>{days=Number(b.dataset.days);historyPage=1;document.querySelectorAll('[data-days]').forEach(x=>x.classList.toggle('selected',x===b));render();});
-$('download').onclick=()=>{const csv='日期,期別,號碼1,號碼2,號碼3,號碼4,號碼5\n'+rows.map(d=>[d.date,d.period,...d.numbers].join(',')).join('\n');const u=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=u;a.download='539-'+days+'天.csv';a.click();URL.revokeObjectURL(u);};
 
 let fetchedAt=window.LOTTERY_DATA.fetchedAt;
 function status(message='') {const age=(Date.now()-Date.parse(fetchedAt))/3600000; $('status').textContent=(location.protocol==='file:'?'':'已發布資料 · ')+'官方資料取得時間：'+new Date(fetchedAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+(age>2?' · 超過2小時未更新，請檢查 GitHub Actions':'')+(message?' · '+message:'');}
-async function sync(){if(location.protocol==='file:'){status();return;}try{const r=await fetch('./data.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw Error();const d=await r.json();if(!Array.isArray(d.draws)||!d.draws.length||!Number.isFinite(Date.parse(d.fetchedAt))||d.draws.some(x=>!/^\d{4}-\d{2}-\d{2}$/.test(x.date)||!/^\d+$/.test(x.period)||!Array.isArray(x.numbers)||x.numbers.length!==5||new Set(x.numbers).size!==5||x.numbers.some(n=>!Number.isInteger(n)||n<1||n>39)))throw Error();draws=d.draws;fetchedAt=d.fetchedAt;render();tick();status('每分鐘檢查網站資料；同步排程執行');}catch{status('讀取更新失敗，保留目前資料');}}
-status();render();tick();sync();setInterval(tick,1000);setInterval(()=>{render();sync();},60000);
+
+function health(s){$('sync-health').textContent=`${s.state==='ok'?'同步正常':'同步異常'} · ${s.message} · 最後成功更新：${s.lastSuccessAt?new Date(s.lastSuccessAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'}):'尚未成功'} · 最近檢查：${s.checkedAt?new Date(s.checkedAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'}):'—'}`;$('sync-health').classList.toggle('warn',s.state!=='ok');}
+function valid(d){
+ if(d?.schemaVersion!==3||!Array.isArray(d.draws)||!d.draws.length||!d.ai||d.ai.rule!=='both-distinct-tails-v1'||!Number.isFinite(Date.parse(d.fetchedAt)))return false;
+ const ids=new Set();
+ for(const r of d.draws){if(!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!/^\d{9}$/.test(r.period)||!Array.isArray(r.numbers)||r.numbers.length!==5||new Set(r.numbers).size!==5||r.numbers.some(n=>!Number.isInteger(n)||n<1||n>39)||ids.has(r.period))return false;ids.add(r.period);}
+ const p=d.ai.prediction;return p&&p.tails.length===2&&new Set(p.tails).size===2&&p.tails.every(t=>Number.isInteger(t)&&t>=0&&t<=9)&&p.afterPeriod===[...d.draws].sort((a,b)=>b.date.localeCompare(a.date))[0].period;
+}
+let syncing=false;
+async function sync(){
+ if(location.protocol==='file:'){status();return;}if(syncing)return;syncing=true;
+ try{
+  const sr=await fetch('./status.json?t='+Date.now(),{cache:'no-store'});if(!sr.ok)throw Error();const s=await sr.json();if(!['ok','error'].includes(s.state))throw Error();health(s);
+  if(s.state==='error'){status('同步失敗，保留目前開獎資料與預測');return;}
+  if(s.snapshotId===window.LOTTERY_DATA.snapshotId){tick();return;}
+  const r=await fetch('./data.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw Error();const d=await r.json();if(!valid(d)||d.snapshotId!==s.snapshotId||Date.parse(d.fetchedAt)<Date.parse(fetchedAt))throw Error();
+  window.LOTTERY_DATA=d;draws=d.draws;fetchedAt=d.fetchedAt;render();tick();status('資料版本已自動更新');
+ }catch{$('sync-health').textContent='目前無法確認線上同步狀態，保留目前資料。';$('sync-health').classList.add('warn');status('讀取更新失敗，保留目前資料');}finally{syncing=false;}
+}
+status();render();tick();sync();setInterval(tick,1000);setInterval(sync,60000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync();});
