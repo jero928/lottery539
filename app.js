@@ -24,7 +24,7 @@ function tick(){window.updatePredictionStatus?.();const now=new Date(),day=dateT
 document.querySelectorAll('[data-days]').forEach(b=>b.onclick=()=>{days=Number(b.dataset.days);historyPage=1;document.querySelectorAll('[data-days]').forEach(x=>x.classList.toggle('selected',x===b));render();});
 
 let fetchedAt=window.LOTTERY_DATA.fetchedAt;
-function status(message='') {const age=(Date.now()-Date.parse(fetchedAt))/3600000; $('status').textContent=(location.protocol==='file:'?'':'已發布資料 · ')+'官方資料取得時間：'+new Date(fetchedAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+(age>2?' · 超過2小時未更新，請檢查 GitHub Actions':'')+(message?' · '+message:'');}
+function status(message='') {const age=(Date.now()-Date.parse(fetchedAt))/3600000; $('status').textContent=(location.protocol==='file:'?'':'已發布資料 · ')+'官方資料取得時間：'+new Date(fetchedAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+(age>2?' · 超過2小時未更新':'')+(message?' · '+message:'');}
 
 function health(s){$('sync-health').textContent=`${s.state==='ok'?'同步正常':'同步異常'} · ${s.message} · 最後成功更新：${s.lastSuccessAt?new Date(s.lastSuccessAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'}):'尚未成功'} · 最近檢查：${s.checkedAt?new Date(s.checkedAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'}):'—'}`;$('sync-health').classList.toggle('warn',s.state!=='ok');}
 function valid(d){
