@@ -9,6 +9,12 @@ import time
 from common import ROOT,TZ,now,read,write,digest,audit
 from model import analyze,hit,both_theory,VERSION,RULE
 API='https://api.taiwanlottery.com/TLCAPIWeB/Lottery/Daily539Result'
+WINDOW_DAYS=180
+
+def analysis_window(rows,clock):
+    end=clock.astimezone(TZ).date()
+    start=end-dt.timedelta(days=WINDOW_DAYS-1)
+    return [r for r in rows if start.isoformat()<=r['date']<=end.isoformat()]
 
 def validate(rows,today=None):
     today=today or now().date();periods={};dates={}
@@ -34,10 +40,9 @@ def validate(rows,today=None):
     return result
 
 def fetch_official(root,old,clock,fetch=None):
-    initialized=(root/'archive'/'history.json').exists()
-    start=old[-1]['date'][:7] if initialized else old[0]['date'][:7]
+    cutoff=clock.astimezone(TZ).date()-dt.timedelta(days=WINDOW_DAYS-1)
+    start=cutoff.isoformat()[:7]
     y,m=map(int,start.split('-'));first=y*12+m-1
-    if initialized:first-=1
     last=clock.year*12+clock.month-1
     added=[]
     for serial in range(first,last+1):
@@ -60,6 +65,7 @@ def fetch_official(root,old,clock,fetch=None):
         for r in rr:
             date=r['lotteryDate'][:10]
             if not date.startswith(month):raise ValueError('Official month mismatch')
+            if date<cutoff.isoformat():continue
             added.append(dict(date=date,period=str(r['period']),numbers=r['drawNumberSize'],source=url,updatedAt=clock.isoformat(),rawSha256=sha))
     # Preserve every old draw; exact duplicates deduplicate, contradictions abort.
     return validate(old+added,clock.date())
@@ -93,7 +99,7 @@ def build_bundle(rows,model,ledger,pubs,settlements,health):
     live=[r for r in settlements if r['eligible']];hits=sum(r['hit'] for r in live)
     current=next((p for p in reversed(ledger) if p['afterPeriod']==rows[-1]['period']),None)
     views=[dict(prediction=p,publication=by_pub.get(p['hash']),result=by_hash.get(p['hash'])) for p in ledger]
-    ai=dict(rule=RULE,prediction=current,liveSummary=dict(totalPredictions=len(pubs),settled=len(live),hits=hits,rate=hits/len(live) if live else None,pending=sum(v['publication'] is not None and v['result'] is None for v in views),excluded=sum(not r['eligible'] for r in settlements)),backtest=model['backtest'],records=views,modelVersion=VERSION,historyCount=len(rows))
+    ai=dict(rule=RULE,prediction=current,liveSummary=dict(totalPredictions=len(pubs),settled=len(live),hits=hits,rate=hits/len(live) if live else None,pending=sum(v['publication'] is not None and v['result'] is None for v in views),excluded=sum(not r['eligible'] for r in settlements)),backtest=model['backtest'],records=views,modelVersion=VERSION,historyCount=model['historyCount'],storedHistoryCount=len(rows),windowDays=WINDOW_DAYS)
     data=dict(schemaVersion=3,fetchedAt=health.get('lastSuccessAt'),draws=list(reversed(rows)),ai=ai)
     data['snapshotId']=digest(data)
     return data
@@ -111,13 +117,14 @@ def run(root=ROOT,fetch=None,clock=None):
     try:
         old=validate(read(root/'archive/history.json',read(root/'data.json')['draws']),clock.date())
         rows=fetch_official(root,old,clock,fetch)
-        signature=digest([dict(period=r['period'],date=r['date'],numbers=r['numbers']) for r in rows])
+        training=analysis_window(rows,clock)
+        signature=digest([dict(period=r['period'],date=r['date'],numbers=r['numbers']) for r in training])
         model=read(root/'archive/model.json')
-        if not model or model.get('trainingHash')!=signature or model.get('modelVersion')!=VERSION:model=analyze(rows)
+        if not model or model.get('trainingHash')!=signature or model.get('modelVersion')!=VERSION:model=analyze(training)
         ledger=read(root/'archive/predictions.json',[]);verify_ledger(ledger)
         period,date=next_target(rows[-1])
         if not any(p['period']==period for p in ledger):
-            p=dict(period=period,targetDate=date,afterPeriod=rows[-1]['period'],tails=model['next']['tails'],probabilities=model['next']['probabilities'],baseline=model['next']['baseline'],generatedAt=clock.isoformat(),modelVersion=VERSION+'-'+signature[:12],trainingHash=signature,historyCount=len(rows),rule=RULE,previousHash=ledger[-1]['hash'] if ledger else 'genesis')
+            p=dict(period=period,targetDate=date,afterPeriod=rows[-1]['period'],tails=model['next']['tails'],probabilities=model['next']['probabilities'],baseline=model['next']['baseline'],generatedAt=clock.isoformat(),modelVersion=VERSION+'-'+signature[:12],trainingHash=signature,historyCount=len(training),windowDays=WINDOW_DAYS,trainingStart=training[0]['date'],trainingEnd=training[-1]['date'],rule=RULE,previousHash=ledger[-1]['hash'] if ledger else 'genesis')
             p['hash']=digest(p);ledger.append(p)
         pubs=read(root/'archive/publications.json',[])
         results=settle(ledger,pubs,rows,read(root/'archive/settlements.json',[]))

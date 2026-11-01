@@ -2,7 +2,7 @@
 import math
 import numpy as np
 from common import digest
-VERSION='logistic-both-v1'
+VERSION='logistic-both-180d-v2'
 RULE='both-distinct-tails-v1'
 def theory(t):return 1-math.comb(39-(3 if t==0 else 4),5)/math.comb(39,5)
 PRIOR=np.array([theory(t) for t in range(10)])
@@ -33,7 +33,7 @@ def forecast(x,y,limit):
     tails=sorted(range(10),key=lambda t:(-p[t],t))[:2]
     return dict(tails=tails,probabilities=p.tolist(),baseline=both_theory(tails))
 def analyze(rows):
-    # Preserve current model architecture; all stored history can contribute.
+    # The caller supplies only the fixed 180-calendar-day analysis window.
     seq=sorted(rows,key=lambda r:r['date']);x,y=features(seq)
     if len(seq)<45:raise ValueError('Insufficient history')
     records=[]

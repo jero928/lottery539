@@ -10,7 +10,7 @@ import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from common import ROOT,TZ,read,write
 from model import hit,both_theory,features,forecast
-from update_data import validate,run,settle,verify_ledger
+from update_data import validate,run,settle,verify_ledger,analysis_window,fetch_official
 from confirm_publication import confirm
 
 class SyncTests(unittest.TestCase):
@@ -35,6 +35,25 @@ class SyncTests(unittest.TestCase):
         conflict=copy.deepcopy(r[0]);conflict['numbers']=[1,2,3,4,5]
         if conflict['numbers']==r[0]['numbers']:conflict['numbers']=[2,3,4,5,6]
         with self.assertRaises(ValueError):validate(r+[conflict])
+
+    def test_half_year_boundary_and_fetch_scope(self):
+        from urllib.parse import urlparse,parse_qs
+        clock=dt.datetime(2026,11,1,9,tzinfo=TZ)
+        cutoff=clock.date()-dt.timedelta(days=179)
+        chosen=analysis_window(self.rows,clock)
+        self.assertTrue(chosen)
+        self.assertTrue(all(cutoff.isoformat()<=r['date']<='2026-11-01' for r in chosen))
+        self.assertLess(len(chosen),len(self.rows))
+        requested=[]
+        def fixture(url):
+            month=parse_qs(urlparse(url).query)['month'][0];requested.append(month)
+            rr=[dict(lotteryDate=r['date'],period=r['period'],drawNumberSize=r['numbers']) for r in self.rows if r['date'].startswith(month)]
+            return json.dumps(dict(rtCode=0,content=dict(totalSize=len(rr),daily539Res=rr))).encode()
+        with tempfile.TemporaryDirectory() as tmp:
+            merged=fetch_official(Path(tmp),self.rows,clock,fixture)
+        self.assertEqual(requested[0],cutoff.isoformat()[:7])
+        self.assertEqual(requested[-1],'2026-11')
+        self.assertEqual(len(merged),len(self.rows),'Archived older draws must not be deleted')
 
     def test_no_future_leakage(self):
         rows=copy.deepcopy(self.rows[:70]);x,y=features(rows);a=forecast(x,y,60)
